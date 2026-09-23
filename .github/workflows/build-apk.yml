@@ -19,9 +19,17 @@ jobs:
           gradle-version: '8.9'
       - name: Build unsigned release APK
         run: gradle assembleRelease --stacktrace
-      - name: Collect APK
-        run: cp app/build/outputs/apk/release/app-release-unsigned.apk IELTS-Executor-v1.3.0-unsigned.apk
+      - name: Collect APK and signing tool
+        run: |
+          cp app/build/outputs/apk/release/app-release-unsigned.apk IELTS-Executor-v1.3.0-unsigned.apk
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          echo "Using build-tools: $BT"
+          cp "$BT/apksigner" ./apksigner
+          cp "$BT/lib/apksigner.jar" ./apksigner.jar
       - uses: actions/upload-artifact@v4
         with:
           name: IELTS-Executor-Android-v1.3.0-unsigned
-          path: IELTS-Executor-v1.3.0-unsigned.apk
+          path: |
+            IELTS-Executor-v1.3.0-unsigned.apk
+            apksigner
+            apksigner.jar
