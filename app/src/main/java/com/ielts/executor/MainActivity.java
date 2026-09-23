@@ -5,7 +5,6 @@ import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
-import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -19,6 +18,7 @@ public class MainActivity extends Activity {
     @Override
     public void onCreate(Bundle b) {
         super.onCreate(b);
+
         web = new WebView(this);
         setContentView(web);
 
@@ -28,34 +28,42 @@ public class MainActivity extends Activity {
         s.setAllowFileAccess(true);
         s.setAllowContentAccess(true);
         s.setJavaScriptCanOpenWindowsAutomatically(false);
+        s.setSupportMultipleWindows(false);
 
-        web.addJavascriptInterface(new AndroidBridge(), "Android");
         web.setWebChromeClient(new WebChromeClient());
         web.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                return handleUrl(request.getUrl().toString());
+                String url = request.getUrl() == null ? null : request.getUrl().toString();
+                return handleNavigation(url);
             }
 
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                return handleUrl(url);
+                return handleNavigation(url);
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
-                // Replace the web-only jump method with a navigation scheme that WebViewClient
-                // can reliably intercept on Android/MIUI. This avoids depending on JS bridge calls.
+
+                // Use a real HTTP/HTTPS navigation instead of custom schemes or JS bridges.
+                // WebViewClient intercepts the navigation and hands it to Android ACTION_VIEW.
+                // If interception ever fails on an OEM WebView, the page still opens inside WebView
+                // rather than the button silently doing nothing.
                 String js = "(function(){" +
                         "window.openLink=function(raw){" +
                         "var s=String(raw||'').trim();" +
                         "var m=s.match(/https?:\\/\\/[^\\s<>\\\"']+/i);" +
                         "var u=m?m[0]:s;" +
+                        "u=u.replace(/[，。！？、）)\\]}]+$/,'');" +
                         "if(!u){alert('这条材料没有可打开的链接');return;}" +
-                        "window.location.href='ieltsopen://open?url='+encodeURIComponent(u);" +
+                        "if(!/^https?:\\/\\//i.test(u)){u='https://'+u;}" +
+                        "var a=document.createElement('a');" +
+                        "a.href=u;a.target='_self';a.rel='external';" +
+                        "a.style.display='none';document.body.appendChild(a);" +
+                        "a.click();setTimeout(function(){try{a.remove();}catch(e){}},1000);" +
                         "};" +
-                        "window.open=function(u){if(u){window.location.href='ieltsopen://open?url='+encodeURIComponent(u);}return null;};" +
                         "})();";
                 view.evaluateJavascript(js, null);
             }
@@ -64,33 +72,38 @@ public class MainActivity extends Activity {
         web.loadUrl("file:///android_asset/index.html");
     }
 
-    private boolean handleUrl(String url) {
+    private boolean handleNavigation(String url) {
         if (url == null || url.trim().isEmpty()) return true;
-        Uri uri = Uri.parse(url);
+
+        Uri uri = Uri.parse(url.trim());
         String scheme = uri.getScheme();
 
         if ("file".equalsIgnoreCase(scheme)) {
             return false;
         }
 
-        if ("ieltsopen".equalsIgnoreCase(scheme)) {
-            String target = uri.getQueryParameter("url");
-            openExternal(target);
+        if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme) || "intent".equalsIgnoreCase(scheme)) {
+            openExternal(url);
             return true;
         }
 
-        // Any real external navigation leaves the WebView and is handed to Android.
-        openExternal(url);
-        return true;
+        // Hand any other explicit scheme (for example an app deep link) to Android as well.
+        if (scheme != null && !scheme.isEmpty()) {
+            openExternal(url);
+            return true;
+        }
+
+        return false;
     }
 
-    private void openExternal(String url) {
-        if (url == null || url.trim().isEmpty()) {
+    private void openExternal(String rawUrl) {
+        if (rawUrl == null || rawUrl.trim().isEmpty()) {
             Toast.makeText(this, "这条材料没有可打开的链接", Toast.LENGTH_SHORT).show();
             return;
         }
 
-        String target = url.trim();
+        String target = rawUrl.trim();
+
         try {
             if (target.startsWith("intent://")) {
                 Intent intent = Intent.parseUri(target, Intent.URI_INTENT_SCHEME);
@@ -112,17 +125,15 @@ public class MainActivity extends Activity {
             }
 
             Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(target));
-            intent.addCategory(Intent.CATEGORY_BROWSABLE);
+            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
             startActivity(intent);
         } catch (Exception e) {
-            Toast.makeText(this, "无法打开链接，请检查链接是否有效", Toast.LENGTH_SHORT).show();
-        }
-    }
-
-    public class AndroidBridge {
-        @JavascriptInterface
-        public void openExternal(String url) {
-            runOnUiThread(() -> MainActivity.this.openExternal(url));
+            // Final fallback: load in the WebView so the click never becomes a no-op.
+            try {
+                web.loadUrl(target);
+            } catch (Exception ignored) {
+                Toast.makeText(this, "无法打开链接，请检查材料链接", Toast.LENGTH_SHORT).show();
+            }
         }
     }
 
