@@ -5,7 +5,6 @@ import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
-import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -28,58 +27,68 @@ public class MainActivity extends Activity {
         s.setAllowFileAccess(true);
         s.setAllowContentAccess(true);
 
-        // Stable path: web button -> Android bridge -> ACTION_VIEW.
-        web.addJavascriptInterface(new AndroidBridge(), "Android");
         web.setWebChromeClient(new WebChromeClient());
         web.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri uri = request.getUrl();
-                if (uri != null && "file".equalsIgnoreCase(uri.getScheme())) return false;
-                if (uri != null) openExternal(uri.toString());
-                return true;
+                if (uri == null) return true;
+                return handleNavigation(uri.toString());
             }
 
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                if (url != null && url.startsWith("file:///android_asset/")) return false;
-                openExternal(url);
-                return true;
+                return handleNavigation(url);
             }
         });
 
         web.loadUrl("file:///android_asset/index.html");
     }
 
-    private void openExternal(String rawUrl) {
-        if (rawUrl == null || rawUrl.trim().isEmpty()) {
-            Toast.makeText(this, "这条材料没有链接", Toast.LENGTH_SHORT).show();
-            return;
-        }
+    private boolean handleNavigation(String rawUrl) {
+        if (rawUrl == null || rawUrl.trim().isEmpty()) return true;
         String url = rawUrl.trim();
-        if (!(url.startsWith("http://") || url.startsWith("https://"))) {
-            Toast.makeText(this, "链接必须以 http:// 或 https:// 开头", Toast.LENGTH_SHORT).show();
-            return;
+        Uri uri = Uri.parse(url);
+        String scheme = uri.getScheme();
+
+        if ("file".equalsIgnoreCase(scheme)) return false;
+
+        if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) {
+            openExternal(url);
+            return true;
         }
+
+        return false;
+    }
+
+    private void openExternal(String url) {
+        Uri uri = Uri.parse(url);
+        String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase();
+
+        // Bilibili material: first try the official Bilibili Android app directly.
+        if (host.equals("b23.tv") || host.endsWith("bilibili.com")) {
+            try {
+                Intent bili = new Intent(Intent.ACTION_VIEW, uri);
+                bili.setPackage("tv.danmaku.bili");
+                startActivity(bili);
+                return;
+            } catch (Exception ignored) {
+                // Fall through to the system chooser/browser.
+            }
+        }
+
         try {
-            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-            intent.addCategory(Intent.CATEGORY_BROWSABLE);
-            startActivity(intent);
+            Intent view = new Intent(Intent.ACTION_VIEW, uri);
+            Intent chooser = Intent.createChooser(view, "打开学习材料");
+            startActivity(chooser);
         } catch (ActivityNotFoundException e) {
             try {
                 web.loadUrl(url);
             } catch (Exception ignored) {
-                Toast.makeText(this, "没有找到可打开这个链接的应用", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "没有可打开该链接的应用", Toast.LENGTH_LONG).show();
             }
         } catch (Exception e) {
-            Toast.makeText(this, "链接打开失败，请检查链接", Toast.LENGTH_SHORT).show();
-        }
-    }
-
-    public class AndroidBridge {
-        @JavascriptInterface
-        public void openExternal(String url) {
-            runOnUiThread(() -> MainActivity.this.openExternal(url));
+            Toast.makeText(this, "链接打开失败：" + e.getClass().getSimpleName(), Toast.LENGTH_LONG).show();
         }
     }
 
